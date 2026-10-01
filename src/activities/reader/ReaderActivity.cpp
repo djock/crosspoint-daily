@@ -80,6 +80,8 @@ void ReaderActivity::onEnter() {
 void ReaderActivity::rememberBookOnceRendered() {
   if (bookRemembered || !pageRendered.load(std::memory_order_acquire)) return;
   bookRemembered = true;
+  // Today's passages are not books: keep Resume and recents on the last real book.
+  if (bookPath.rfind("/Daily/", 0) == 0) return;
   APP_STATE.openEpubPath = bookPath;
   APP_STATE.saveToFile();
   RECENT_BOOKS.addBook(bookPath, getBookTitle(), getBookAuthor(), getBookThumbBmpPath());
