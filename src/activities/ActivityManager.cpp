@@ -16,6 +16,7 @@
 #include "boot_sleep/SleepActivity.h"
 #include "browser/OpdsBookBrowserActivity.h"
 #include "components/HeaderBackTapTarget.h"
+#include "daily/DailyActivity.h"
 #include "home/CrashActivity.h"
 #include "home/FileBrowserActivity.h"
 #include "home/HomeActivity.h"
@@ -263,6 +264,18 @@ void ActivityManager::goToUsbDrive() {
 }
 
 void ActivityManager::goToSettings() { replaceActivity(std::make_unique<SettingsActivity>(renderer, mappedInput)); }
+
+bool ActivityManager::goToDaily() {
+  // The screen owns bounded row/text storage; a fallible activity allocation
+  // keeps low-memory failure on the current screen rather than aborting.
+  auto activity = makeUniqueNoThrow<DailyActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: daily readings activity");
+    return false;
+  }
+  replaceActivity(std::move(activity));
+  return true;
+}
 
 void ActivityManager::goToFileBrowser(std::string path) {
   replaceActivity(std::make_unique<FileBrowserActivity>(renderer, mappedInput, std::move(path)));
