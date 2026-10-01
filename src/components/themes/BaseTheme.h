@@ -24,6 +24,11 @@ struct Rect {
   explicit Rect(int x = 0, int y = 0, int width = 0, int height = 0) : x(x), y(y), width(width), height(height) {}
 };
 
+// listSelectionStyle value past the fui::SelectionStyle range: selected rows
+// keep a white ground and get a thick black border.
+constexpr int LIST_SELECTION_OUTLINE = 4;
+constexpr uint8_t LIST_SELECTION_OUTLINE_WIDTH = 4;
+
 struct ThemeMetrics {
   int batteryWidth;
   int batteryHeight;
@@ -47,7 +52,8 @@ struct ThemeMetrics {
   int listRowRadius;       // row corner radius (RoundedRaff cards, Lyra pill)
   int listInset;           // horizontal inset of the whole list band
   int listSidePadding;     // text inset within a row
-  int listSelectionStyle;  // 0=invert fill, 1=light pill, 2=underline, 3=triangle (fui::SelectionStyle order)
+  int listSelectionStyle;  // 0=invert fill, 1=light pill, 2=underline, 3=triangle (fui::SelectionStyle order),
+                           // LIST_SELECTION_OUTLINE = thick border (mapped to row styles in uiThemeTokens)
   int listScrollWidth;     // scroll indicator thickness
   int listScrollSide;      // 0 = right edge, 1 = left edge
   bool listTitleBold;      // bold row titles (RoundedRaff)

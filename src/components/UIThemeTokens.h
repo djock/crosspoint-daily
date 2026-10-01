@@ -21,7 +21,21 @@ inline freeink::ui::ThemeTokens uiThemeTokens(const freeink::ui::GfxRendererTarg
   tokens.listRowRadius = static_cast<uint8_t>(metrics.listRowRadius);
   tokens.listInset = static_cast<int16_t>(metrics.listInset);
   tokens.listSidePadding = static_cast<int16_t>(metrics.listSidePadding);
-  tokens.listSelectionStyle = static_cast<fui::SelectionStyle>(metrics.listSelectionStyle);
+  if (metrics.listSelectionStyle == LIST_SELECTION_OUTLINE) {
+    // Outline-only rows: the selected row keeps a white ground and gains a
+    // thick black border. Explicit row styles pass through InvertFill as-is.
+    tokens.listSelectionStyle = fui::SelectionStyle::InvertFill;
+    tokens.listRow.explicitlySet = true;
+    tokens.listRow.normal.foreground = fui::Paint::solid(fui::Color::Black);
+    tokens.listRow.selected = tokens.listRow.normal;
+    tokens.listRow.selected.border = fui::Paint::solid(fui::Color::Black);
+    tokens.listRow.selected.borderWidth = LIST_SELECTION_OUTLINE_WIDTH;
+    tokens.listRow.focused = tokens.listRow.selected;
+    tokens.listRow.active = tokens.listRow.selected;
+    tokens.listRow.disabled = tokens.listRow.normal;
+  } else {
+    tokens.listSelectionStyle = static_cast<fui::SelectionStyle>(metrics.listSelectionStyle);
+  }
   tokens.listScrollWidth = static_cast<int16_t>(metrics.listScrollWidth);
   tokens.listScrollSide = static_cast<uint8_t>(metrics.listScrollSide);
   // No extra scroll-track inset: the bezel is already compensated once at the

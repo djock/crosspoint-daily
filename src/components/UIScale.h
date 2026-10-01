@@ -1,4 +1,5 @@
 #pragma once
+#include "CrossPointSettings.h"
 #include "fontIds.h"
 
 // FreeInkUI font slots. Row heights, header height, and touch sizes are not
@@ -13,6 +14,14 @@ struct UIScaleSpec {
 
 inline UIScaleSpec uiScaleSpec() {
   UIScaleSpec spec{};
+  if (SETTINGS.uiTheme == CrossPointSettings::DAILY) {
+    // Daily reads like the books: larger Noto text and serif titles. These
+    // reader fonts are Latin subsets, unlike the Ubuntu UI fonts below.
+    spec.smallFontId = NOTOSANS_14_FONT_ID;
+    spec.bodyFontId = NOTOSANS_16_FONT_ID;
+    spec.titleFontId = NOTOSERIF_18_FONT_ID;
+    return spec;
+  }
   spec.smallFontId = UI_10_FONT_ID;
   spec.bodyFontId = UI_12_FONT_ID;
   // Titles use the UI font, not a reader font: fui headers draw book and
