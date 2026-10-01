@@ -3,6 +3,8 @@
 #include <GfxRenderer.h>
 
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "components/icons/blocks.h"
 #include "components/icons/book.h"
@@ -49,6 +51,20 @@ const uint8_t* iconForName(const UIIcon icon) {
   }
 }
 }  // namespace
+
+void DailyTheme::drawRecentBookCover(GfxRenderer& renderer, const Rect rect, const std::vector<RecentBook>& recentBooks,
+                                     const int selectorIndex, bool& coverRendered, bool& coverBufferStored,
+                                     bool& bufferRestored, std::function<bool()> storeCoverBuffer) const {
+  // Lyra draws the cover and text; drawn as unselected it skips its gray
+  // selection wash, and the card frame below marks the selection instead.
+  LyraTheme::drawRecentBookCover(renderer, rect, recentBooks, -1, coverRendered, coverBufferStored, bufferRestored,
+                                 std::move(storeCoverBuffer));
+  if (recentBooks.empty()) return;
+  const auto& metrics = DailyMetrics::values;
+  const bool selected = selectorIndex == 0;
+  renderer.drawRect(rect.x + metrics.contentSidePadding, rect.y, rect.width - 2 * metrics.contentSidePadding,
+                    rect.height, selected ? LIST_SELECTION_OUTLINE_WIDTH : 1, true);
+}
 
 void DailyTheme::drawButtonMenu(GfxRenderer& renderer, const Rect rect, const int buttonCount, const int selectedIndex,
                                 const std::function<std::string(int index)>& buttonLabel,
