@@ -33,7 +33,10 @@ class DailyActivity final : public Activity {
     uint16_t titleOffset = 0;
     char file[96] = {};
     char excerpt[240] = {};
+    // Quote attribution's name ("— Seneca, On…" -> "Seneca"), empty otherwise.
+    char author[48] = {};
     bool quote = false;
+    bool read = false;
     int minutes = 0;
   };
   // Fixed screen-lifetime storage avoids allocation in the render and sync paths.

@@ -135,6 +135,9 @@ bool ReaderActivity::handleEndOfBookMenu(const bool suppressConfirmRelease) {
     case EndOfBookOptions::Action::GoHome:
       onGoHome();
       return true;
+    case EndOfBookOptions::Action::GoToday:
+      if (!activityManager.goToDaily()) onGoHome();
+      return true;
     case EndOfBookOptions::Action::LastPage:
       onReturnFromEndOfBook();
       requestUpdate();

@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "DailyPassages.h"
 #include "WifiCredentialStore.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -26,8 +27,8 @@ constexpr const char* ATTEMPT = "/.crosspoint/daily-attempt";
 constexpr unsigned long JOIN_TIMEOUT_MS = 7000;
 constexpr unsigned long SYNC_BUDGET_MS = 20000;
 constexpr unsigned long SOCKET_TIMEOUT_MS = 2500;
-constexpr const char* KINDS[] = {"daily_dad", "daily_stoic"};
-constexpr StrId LABELS[] = {StrId::STR_DAILY_DAD, StrId::STR_DAILY_STOIC};
+using daily_passages::KINDS;
+using daily_passages::LABELS;
 constexpr StrId MONTHS[] = {StrId::STR_DAILY_MONTH_JAN, StrId::STR_DAILY_MONTH_FEB, StrId::STR_DAILY_MONTH_MAR,
                             StrId::STR_DAILY_MONTH_APR, StrId::STR_DAILY_MONTH_MAY, StrId::STR_DAILY_MONTH_JUN,
                             StrId::STR_DAILY_MONTH_JUL, StrId::STR_DAILY_MONTH_AUG, StrId::STR_DAILY_MONTH_SEP,
@@ -199,9 +200,10 @@ bool DailyActivity::installManifest(const JsonDocument& doc) {
   RenderLock lock(*this);
   // Cleared in place: an Entry is too large for a stack temporary.
   for (auto& entry : entries) {
-    entry.title[0] = entry.file[0] = entry.excerpt[0] = '\0';
+    entry.title[0] = entry.file[0] = entry.excerpt[0] = entry.author[0] = '\0';
     entry.titleOffset = 0;
     entry.quote = false;
+    entry.read = false;
     entry.minutes = 0;
   }
   const char* date = doc["date"];
@@ -225,6 +227,8 @@ bool DailyActivity::installManifest(const JsonDocument& doc) {
     entry.titleOffset = separator ? static_cast<uint16_t>(separator - entry.title + strlen(EM_DASH_SEPARATOR)) : 0;
     loadDetails(entry);
   }
+  // Open on the first unread passage.
+  selected = entries[0].read && entries[1].file[0] && !entries[1].read ? 1 : 0;
   return true;
 }
 
@@ -432,7 +436,10 @@ void DailyActivity::loadDetails(Entry& entry) {
   int words = 0;
   bool inWord = false;
   size_t used = 0;
-  bool excerptDone = false;
+  size_t authorUsed = 0;
+  // 0 = excerpt paragraph, 1 = the paragraph after it, 2 = rest of the body.
+  int paragraph = 0;
+  bool authorDone = false;
   int received;
   while ((received = file.read(chunk, sizeof(chunk))) > 0) {
     for (int i = 0; i < received; ++i) {
@@ -444,19 +451,40 @@ void DailyActivity::loadDetails(Entry& entry) {
         if (c == '\n') ++newlines;
         continue;
       }
-      if (excerptDone) continue;
       if (c == '\n') {
-        excerptDone = used > 0;
+        if (paragraph == 0 && used > 0) {
+          paragraph = 1;
+        } else if (paragraph == 1 && authorUsed > 0) {
+          paragraph = 2;
+        }
         continue;
       }
-      if (c == '\r' || used + 1 >= sizeof(entry.excerpt)) continue;
-      entry.excerpt[used++] = c;
+      if (c == '\r') continue;
+      if (paragraph == 0) {
+        if (used + 1 < sizeof(entry.excerpt)) entry.excerpt[used++] = c;
+      } else if (paragraph == 1 && !authorDone) {
+        if (c == ',') {
+          authorDone = true;
+        } else if (authorUsed + 1 < sizeof(entry.author)) {
+          entry.author[authorUsed++] = c;
+        }
+      }
     }
   }
   entry.excerpt[used] = '\0';
-  // Quotes open with a curly double quote (U+201C).
+  entry.author[authorUsed] = '\0';
+  // Quotes open with a curly double quote (U+201C); their attribution line
+  // starts with an em dash (U+2014): keep only the name after it.
   entry.quote = strncmp(entry.excerpt, "\xE2\x80\x9C", 3) == 0;
+  if (entry.quote && strncmp(entry.author, "\xE2\x80\x94", 3) == 0) {
+    const char* name = entry.author + 3;
+    while (*name == ' ') ++name;
+    memmove(entry.author, name, strlen(name) + 1);
+  } else {
+    entry.author[0] = '\0';
+  }
   entry.minutes = std::max(1, (words + WORDS_PER_MINUTE / 2) / WORDS_PER_MINUTE);
+  entry.read = daily_passages::isRead(entry.file);
 }
 
 void DailyActivity::drawCard(const Entry& entry, const int index, const int x, const int y, const int width,
@@ -498,13 +526,19 @@ void DailyActivity::drawCard(const Entry& entry, const int index, const int x, c
   }
 
   renderer.drawLine(innerX, metaTop - 6, innerX + innerWidth, metaTop - 6, true);
-  char meta[32];
-  snprintf(meta, sizeof(meta), tr(STR_DAILY_MINUTES), entry.minutes);
-  renderer.drawText(UI_10_FONT_ID, innerX, metaTop, meta);
+  char meta[80];
+  int length = entry.read ? snprintf(meta, sizeof(meta), "%s \u00B7 ", tr(STR_DAILY_FINISHED_SHORT)) : 0;
+  if (length < 0 || static_cast<size_t>(length) >= sizeof(meta)) length = 0;
+  length += snprintf(meta + length, sizeof(meta) - length, tr(STR_DAILY_MINUTES), entry.minutes);
+  if (entry.author[0] && length > 0 && static_cast<size_t>(length) < sizeof(meta)) {
+    snprintf(meta + length, sizeof(meta) - length, " \u00B7 %s", entry.author);
+  }
   const char* read = tr(STR_DAILY_READ);
-  renderer.drawText(UI_10_FONT_ID,
-                    innerX + innerWidth - renderer.getTextWidth(UI_10_FONT_ID, read, EpdFontFamily::BOLD), metaTop,
-                    read, true, EpdFontFamily::BOLD);
+  const int readWidth = renderer.getTextWidth(UI_10_FONT_ID, read, EpdFontFamily::BOLD);
+  // A long attribution ellipsizes before it reaches "Read ›".
+  renderer.drawText(UI_10_FONT_ID, innerX, metaTop,
+                    renderer.truncatedText(UI_10_FONT_ID, meta, innerWidth - readWidth - 12).c_str());
+  renderer.drawText(UI_10_FONT_ID, innerX + innerWidth - readWidth, metaTop, read, true, EpdFontFamily::BOLD);
 }
 
 void DailyActivity::render(RenderLock&&) {
@@ -524,7 +558,21 @@ void DailyActivity::render(RenderLock&&) {
   for (int i = 0; i < 2; ++i) {
     drawCard(entries[i], i, safe.x + MARGIN, top + i * (cardHeight + GAP), cardWidth, cardHeight);
   }
-  const char* statusText = I18N.get(status.load());
+  // "Up to date · 1 of 2 read" once passages are saved.
+  int saved = 0;
+  int read = 0;
+  for (const auto& entry : entries) {
+    saved += entry.file[0] ? 1 : 0;
+    read += entry.read ? 1 : 0;
+  }
+  char statusText[96];
+  int length = snprintf(statusText, sizeof(statusText), "%s", I18N.get(status.load()));
+  if (saved > 0 && length > 0 && static_cast<size_t>(length) < sizeof(statusText)) {
+    length += snprintf(statusText + length, sizeof(statusText) - length, " \u00B7 ");
+    if (static_cast<size_t>(length) < sizeof(statusText)) {
+      snprintf(statusText + length, sizeof(statusText) - length, tr(STR_DAILY_READ_COUNT), read, saved);
+    }
+  }
   renderer.drawText(UI_10_FONT_ID, safe.x + (safe.width - renderer.getTextWidth(UI_10_FONT_ID, statusText)) / 2,
                     statusTop, statusText);
 

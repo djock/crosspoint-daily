@@ -5,8 +5,12 @@
 #include <HalGPIO.h>
 #include <I18n.h>
 
+#include <cstdio>
+#include <cstring>
+
 #include "CrossPointSettings.h"
 #include "ReaderUtils.h"
+#include "activities/daily/DailyPassages.h"
 // ReaderUtils.h pulls in ActivityManager.h, which only forward-declares Activity while holding
 // std::unique_ptr<Activity> members. Destroying that unique_ptr needs the complete type, so the
 // definition must be visible here.
@@ -35,9 +39,21 @@ void EndOfBookOptions::loadOnce(const std::string& currentBookPath) {
     return;
   }
   folder = FsHelpers::extractFolderPath(currentBookPath);
-  names = NextBookFinder::findNextBooks(currentBookPath, MAX_SUGGESTIONS);
+  dailyKind = daily_passages::kindOf(currentBookPath.c_str());
+  if (dailyKind >= 0) {
+    // Reaching this screen is what counts as reading the passage.
+    daily_passages::markRead(currentBookPath.c_str());
+    names.clear();
+    char sibling[96];
+    if (daily_passages::siblingPath(currentBookPath.c_str(), 1 - dailyKind, sibling, sizeof(sibling)) &&
+        Storage.exists(sibling) && !daily_passages::isRead(sibling)) {
+      names.emplace_back(strrchr(sibling, '/') + 1);
+    }
+  } else {
+    names = NextBookFinder::findNextBooks(currentBookPath, MAX_SUGGESTIONS);
+  }
   selector.store(0, std::memory_order_relaxed);
-  if (!names.empty()) {
+  if (!names.empty() || dailyKind >= 0) {
     // One-time app setup on the render task, before the first render/route.
     resetUi();
     app.on(ACTION_ROW, &EndOfBookOptions::onRowEvent, this);
@@ -55,7 +71,21 @@ void EndOfBookOptions::buildRowItems() {
   rowCount = 0;
   for (const auto& name : names) {
     if (rowCount >= MAX_ROWS) break;
-    rowLabels[rowCount] = displayName(name);
+    if (dailyKind >= 0) {
+      char label[64];
+      snprintf(label, sizeof(label), tr(STR_DAILY_NEXT), I18N.get(daily_passages::LABELS[1 - dailyKind]));
+      rowLabels[rowCount] = label;
+    } else {
+      rowLabels[rowCount] = displayName(name);
+    }
+    fui::ListItem item;
+    item.label = rowLabels[rowCount].c_str();
+    item.actionValue = static_cast<int16_t>(rowCount);
+    rowItems[rowCount] = item;
+    rowCount++;
+  }
+  if (dailyKind >= 0 && rowCount < MAX_ROWS) {
+    rowLabels[rowCount] = tr(STR_DAILY_BACK_TO_TODAY);
     fui::ListItem item;
     item.label = rowLabels[rowCount].c_str();
     item.actionValue = static_cast<int16_t>(rowCount);
@@ -72,7 +102,19 @@ void EndOfBookOptions::buildRowItems() {
   }
 }
 
-bool EndOfBookOptions::menuActive() const { return isLoaded.load(std::memory_order_acquire) && !names.empty(); }
+bool EndOfBookOptions::menuActive() const {
+  return isLoaded.load(std::memory_order_acquire) && (!names.empty() || dailyKind >= 0);
+}
+
+// Rows: suggestions, then "Today" for a finished passage, then "Home".
+EndOfBookOptions::Action EndOfBookOptions::rowAction(const int index, std::string* openPath) const {
+  if (index >= 0 && index < static_cast<int>(names.size())) {
+    if (openPath) *openPath = fullPath(index);
+    return Action::OpenBook;
+  }
+  if (dailyKind >= 0 && index == static_cast<int>(names.size())) return Action::GoToday;
+  return Action::GoHome;
+}
 
 std::string EndOfBookOptions::fullPath(const size_t index) const {
   if (index >= names.size()) {
@@ -83,7 +125,7 @@ std::string EndOfBookOptions::fullPath(const size_t index) const {
 
 void EndOfBookOptions::onRowEvent(const fui::ActionEvent& event, void* user) {
   auto* self = static_cast<EndOfBookOptions*>(user);
-  if (event.value < 0 || event.value > static_cast<int16_t>(self->names.size())) return;
+  if (event.value < 0 || event.value >= static_cast<int16_t>(self->rowCount)) return;
   self->selector.store(event.value, std::memory_order_relaxed);
   // The tapped row leaves this screen (open book or home); a lingering flash
   // would gray an unrelated element on the next render.
@@ -100,13 +142,7 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   // app.on(ACTION_ROW, ...)), which sets tappedRow, so it flags this as always false.
   // cppcheck-suppress knownConditionTrueFalse
   if (route && tappedRow >= 0) {
-    if (tappedRow < static_cast<int>(names.size())) {
-      if (openPath) {
-        *openPath = fullPath(tappedRow);
-      }
-      return Action::OpenBook;
-    }
-    return Action::GoHome;  // "Home" row tapped
+    return rowAction(tappedRow, openPath);
   }
   if (route.routed && app.invalidated()) {
     return Action::Redraw;
@@ -114,13 +150,7 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
 
   const int selectedIndex = selector.load(std::memory_order_relaxed);
   if (input.wasReleased(MappedInputManager::Button::Confirm)) {
-    if (selectedIndex < static_cast<int>(names.size())) {
-      if (openPath) {
-        *openPath = fullPath(selectedIndex);
-      }
-      return Action::OpenBook;
-    }
-    return Action::GoHome;  // "Home" entry selected
+    return rowAction(selectedIndex, openPath);
   }
 
   // Short-press Back returns to the last page; a long press falls through to the
@@ -139,7 +169,7 @@ EndOfBookOptions::Action EndOfBookOptions::handleMenuInput(const MappedInputMana
   const auto triggered = [&](const MappedInputManager::Button button) {
     return usePress ? input.wasPressed(button) : input.wasReleased(button);
   };
-  const int itemCount = static_cast<int>(names.size()) + 1;  // + "Home" entry
+  const int itemCount = static_cast<int>(rowCount);
   if (triggered(MappedInputManager::Button::NavPrevious)) {
     selector.store(ButtonNavigator::previousIndex(selectedIndex, itemCount), std::memory_order_relaxed);
     return Action::Redraw;
@@ -199,8 +229,16 @@ void EndOfBookOptions::render(GfxRenderer& renderer, const MappedInputManager& i
   const int titleY = safe.y + safe.height / 8;
   const int subtitleY = titleY + renderer.getLineHeight(UI_12_FONT_ID) + metrics.verticalSpacing;
 
-  UITheme::drawCenteredText(renderer, safe, UI_12_FONT_ID, titleY, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
-  UITheme::drawCenteredText(renderer, safe, UI_10_FONT_ID, subtitleY, tr(STR_EOB_CONTINUE_WITH));
+  if (dailyKind >= 0) {
+    char title[64];
+    snprintf(title, sizeof(title), tr(STR_DAILY_FINISHED), I18N.get(daily_passages::LABELS[dailyKind]));
+    UITheme::drawCenteredText(renderer, safe, UI_12_FONT_ID, titleY, title, true, EpdFontFamily::BOLD);
+    UITheme::drawCenteredText(renderer, safe, UI_10_FONT_ID, subtitleY,
+                              names.empty() ? tr(STR_DAILY_BOTH_READ) : tr(STR_EOB_CONTINUE_WITH));
+  } else {
+    UITheme::drawCenteredText(renderer, safe, UI_12_FONT_ID, titleY, tr(STR_END_OF_BOOK), true, EpdFontFamily::BOLD);
+    UITheme::drawCenteredText(renderer, safe, UI_10_FONT_ID, subtitleY, tr(STR_EOB_CONTINUE_WITH));
+  }
 
   // The list renders through the FreeInkApp so its rows register touch hit
   // rects; renderUi re-derives the device context, picking up any rotation
